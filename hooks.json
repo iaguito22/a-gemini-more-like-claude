@@ -1,0 +1,38 @@
+{
+  "verificacion": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "command": "python3 -S -E ~/.gemini/config/hooks-scripts/dispatch.py pre",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "command": "python3 -S -E ~/.gemini/config/hooks-scripts/dispatch.py post",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostInvocation": [
+      {
+        "command": "python3 -S -E ~/.gemini/config/hooks-scripts/dispatch.py postinv",
+        "timeout": 15
+      }
+    ],
+    "Stop": [
+      {
+        "command": "python3 -S -E ~/.gemini/config/hooks-scripts/dispatch.py stop",
+        "timeout": 15
+      }
+    ]
+  }
+}

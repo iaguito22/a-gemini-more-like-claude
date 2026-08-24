@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+"""agy-ver — abre una ventana de Chrome VISIBLE y la conduce por CDP.
+
+Existe porque el CLI de Antigravity no expone sus herramientas de navegador
+(open_browser_url y compania solo estan disponibles con el IDE conectado), y sin
+ellas el agente se inventa cada vez una forma distinta de mirar una pagina:
+headless por aqui, un script de playwright por alla, y media hora perdida.
+
+Aqui hay UNA forma. Y la ventana se ve, asi que se puede mirar mientras trabaja.
+
+  agy-ver abrir <fichero|url>      abre la ventana y navega
+  agy-ver foto [nombre]            captura -> imprime la ruta del png
+  agy-ver logs                     console.* y errores desde que se abrio
+  agy-ver js '<expresion>'         evalua en la pagina y devuelve el valor
+  agy-ver tecla <Tecla> [veces]    ArrowLeft, Space, KeyA, Enter...
+  agy-ver pulsa <Tecla> <ms>       mantiene la tecla pulsada ese tiempo
+  agy-ver clic <x> <y>             clic en pixel
+  agy-ver mide <segundos>          FPS reales y errores durante ese rato
+  agy-ver recarga
+  agy-ver cerrar                   cierra Chrome y borra el perfil temporal
+"""
+import base64, json, os, socket, subprocess, sys, time, urllib.request
+
+DIR = "/tmp/agy-ver"
+PERFIL = DIR + "/perfil"
+EST = DIR + "/estado.json"
+PUERTO = 9333
+
+
+# --------------------------------------------------------------- WebSocket minimo
+class WS:
+    def __init__(self, url):
+        resto = url.split("://", 1)[1]
+        hostport, _, ruta = resto.partition("/")
+        host, _, puerto = hostport.partition(":")
+        self.s = socket.create_connection((host, int(puerto or 80)), timeout=30)
+        clave = base64.b64encode(os.urandom(16)).decode()
+        self.s.sendall((
+            "GET /%s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n" % (ruta, hostport, clave)
+        ).encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            trozo = self.s.recv(4096)
+            if not trozo:
+                raise RuntimeError("el navegador cerro la conexion durante el handshake")
+            buf += trozo
+        self.sobra = buf.split(b"\r\n\r\n", 1)[1]
+        self.n = 0
+
+    def _leer(self, cuantos):
+        while len(self.sobra) < cuantos:
+            trozo = self.s.recv(65536)
+            if not trozo:
+                raise RuntimeError("conexion cerrada")
+            self.sobra += trozo
+        out, self.sobra = self.sobra[:cuantos], self.sobra[cuantos:]
+        return out
+
+    def enviar(self, obj):
+        datos = json.dumps(obj).encode()
+        n = len(datos)
+        cab = bytearray([0x81])
+        if n < 126:
+            cab.append(0x80 | n)
+        elif n < 65536:
+            cab.append(0x80 | 126); cab += n.to_bytes(2, "big")
+        else:
+            cab.append(0x80 | 127); cab += n.to_bytes(8, "big")
+        m = os.urandom(4)
+        cab += m
+        self.s.sendall(bytes(cab) + bytes(b ^ m[i % 4] for i, b in enumerate(datos)))
+
+    def recibir(self):
+        while True:
+            b1, b2 = self._leer(2)
+            op, n = b1 & 0x0F, b2 & 0x7F
+            if n == 126:
+                n = int.from_bytes(self._leer(2), "big")
+            elif n == 127:
+                n = int.from_bytes(self._leer(8), "big")
+            cuerpo = self._leer(n)
+            if op == 9:            # ping -> pong
+                continue
+            if op in (1, 2):
+                return json.loads(cuerpo.decode("utf-8", "replace"))
+            if op == 8:
+                raise RuntimeError("el navegador cerro la pagina")
+
+    def cmd(self, metodo, **params):
+        self.n += 1
+        self.enviar({"id": self.n, "method": metodo, "params": params})
+        while True:
+            m = self.recibir()
+            if m.get("id") == self.n:
+                if "error" in m:
+                    raise RuntimeError("%s: %s" % (metodo, m["error"].get("message")))
+                return m.get("result", {})
+
+
+# ------------------------------------------------------------------------ estado
+def estado():
+    try:
+        with open(EST) as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def guardar(st):
+    os.makedirs(DIR, exist_ok=True)
+    with open(EST, "w") as fh:
+        json.dump(st, fh)
+
+
+def conectar():
+    st = estado()
+    if not st.get("ws"):
+        salir("No hay ninguna ventana abierta. Primero: agy-ver abrir <fichero>")
+    try:
+        return WS(st["ws"]), st
+    except Exception:
+        salir("La ventana ya no responde. Vuelve a: agy-ver abrir <fichero>")
+
+
+def salir(msg, codigo=1):
+    print(msg)
+    sys.exit(codigo)
+
+
+def http(ruta, puerto=PUERTO):
+    with urllib.request.urlopen("http://127.0.0.1:%d%s" % (puerto, ruta), timeout=5) as r:
+        return json.load(r)
+
+
+# El agente no ve la consola del navegador si no la recogemos nosotros. Este shim se
+# instala ANTES de cargar la pagina, asi que pilla tambien los errores de arranque.
+SHIM = r"""
+(() => {
+  window.__agy = { log: [], fps: [] };
+  const cap = (tipo) => {
+    const orig = console[tipo].bind(console);
+    console[tipo] = (...a) => {
+      try { window.__agy.log.push(tipo.toUpperCase() + ': ' + a.map(x =>
+        (x && x.stack) ? x.stack : (typeof x === 'object' ? JSON.stringify(x) : String(x))
+      ).join(' ')); } catch (e) {}
+      orig(...a);
+    };
+  };
+  ['log', 'warn', 'error', 'info'].forEach(cap);
+  addEventListener('error', e => window.__agy.log.push(
+    'PAGE-ERROR: ' + (e.error && e.error.stack ? e.error.stack : e.message) +
+    ' @' + (e.filename || '') + ':' + (e.lineno || 0)));
+  addEventListener('unhandledrejection', e => window.__agy.log.push(
+    'PROMESA-SIN-CAPTURAR: ' + (e.reason && e.reason.stack ? e.reason.stack : e.reason)));
+  let ult = performance.now();
+  const tic = (t) => { window.__agy.fps.push(t - ult); ult = t;
+    if (window.__agy.fps.length > 600) window.__agy.fps.shift();
+    requestAnimationFrame(tic); };
+  requestAnimationFrame(tic);
+})();
+"""
+
+
+def a_url(destino):
+    if "://" in destino:
+        return destino
+    ruta = os.path.abspath(os.path.expanduser(destino))
+    if not os.path.exists(ruta):
+        salir("No existe: " + ruta)
+    return "file://" + ruta
+
+
+# ----------------------------------------------------------------------- ordenes
+def abrir(destino):
+    url = a_url(destino)
+    st = estado()
+    vivo = False
+    if st.get("pid"):
+        try:
+            os.kill(st["pid"], 0)
+            http("/json/version")
+            vivo = True
+        except Exception:
+            vivo = False
+
+    if not vivo:
+        os.makedirs(PERFIL, exist_ok=True)
+        chrome = next((c for c in ("google-chrome-stable", "google-chrome", "chromium",
+                                   "chromium-browser", "brave")
+                       if subprocess.call(["which", c], stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL) == 0), None)
+        if not chrome:
+            salir("No hay ningun Chrome/Chromium instalado.")
+        p = subprocess.Popen(
+            [chrome, "--remote-debugging-port=%d" % PUERTO, "--user-data-dir=" + PERFIL,
+             "--no-first-run", "--no-default-browser-check", "--disable-session-crashed-bubble",
+             "--disable-features=Translate,MediaRouter", "--window-size=1280,860",
+             "--allow-file-access-from-files", "about:blank"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(100):
+            try:
+                http("/json/version"); break
+            except Exception:
+                time.sleep(0.15)
+        else:
+            salir("Chrome no ha levantado el puerto de depuracion en 15s.")
+        st = {"pid": p.pid, "n": 0}
+
+    paginas = [t for t in http("/json/list") if t.get("type") == "page"]
+    if not paginas:
+        salir("Chrome esta abierto pero sin pestanas.")
+    st["ws"] = paginas[0]["webSocketDebuggerUrl"]
+    guardar(st)
+
+    ws = WS(st["ws"])
+    ws.cmd("Page.enable")
+    ws.cmd("Runtime.enable")
+    ws.cmd("Page.addScriptToEvaluateOnNewDocument", source=SHIM)
+    ws.cmd("Page.navigate", url=url)
+    # Esperar a que la pagina este pintada de verdad, no solo respondida.
+    for _ in range(120):
+        time.sleep(0.1)
+        try:
+            r = ws.cmd("Runtime.evaluate", expression="document.readyState", returnByValue=True)
+            if r["result"].get("value") == "complete":
+                break
+        except Exception:
+            pass
+    time.sleep(0.4)
+    titulo = ws.cmd("Runtime.evaluate", expression="document.title",
+                    returnByValue=True)["result"].get("value") or "(sin titulo)"
+    errores = _logs(ws, solo_malos=True)
+    print("Ventana abierta y visible. %s -> %s" % (url, titulo))
+    if errores:
+        print("\nYA HAY ERRORES AL CARGAR:\n" + errores)
+
+
+def _logs(ws, solo_malos=False):
+    r = ws.cmd("Runtime.evaluate",
+               expression="JSON.stringify((window.__agy&&window.__agy.log)||[])",
+               returnByValue=True)
+    try:
+        lineas = json.loads(r["result"].get("value") or "[]")
+    except Exception:
+        lineas = []
+    if solo_malos:
+        lineas = [l for l in lineas if l.startswith(("ERROR", "PAGE-ERROR", "PROMESA"))]
+    return "\n".join(lineas[-60:])
+
+
+def foto(nombre=None):
+    ws, st = conectar()
+    st["n"] = st.get("n", 0) + 1
+    guardar(st)
+    ruta = os.path.join(DIR, "%02d-%s.png" % (st["n"], (nombre or "captura").replace("/", "_")))
+    datos = ws.cmd("Page.captureScreenshot", format="png")["data"]
+    with open(ruta, "wb") as fh:
+        fh.write(base64.b64decode(datos))
+    print(ruta)
+
+
+TECLAS = {
+    "arrowleft": (37, "ArrowLeft", ""), "arrowright": (39, "ArrowRight", ""),
+    "arrowup": (38, "ArrowUp", ""), "arrowdown": (40, "ArrowDown", ""),
+    "space": (32, "Space", " "), "enter": (13, "Enter", "\r"), "escape": (27, "Escape", ""),
+    "tab": (9, "Tab", ""), "backspace": (8, "Backspace", ""), "shift": (16, "ShiftLeft", ""),
+}
+
+
+def _tecla_args(nombre):
+    b = nombre.lower()
+    if b in TECLAS:
+        return TECLAS[b]
+    if b.startswith("key") and len(b) == 4:
+        c = b[3]
+        return (ord(c.upper()), "Key" + c.upper(), c)
+    if len(b) == 1:
+        return (ord(b.upper()), ("Key" + b.upper()) if b.isalpha() else b, b)
+    salir("No conozco la tecla '%s'. Usa ArrowLeft, Space, Enter, KeyA..." % nombre)
+
+
+def _pulsar(ws, nombre, ms=40):
+    code, key, texto = _tecla_args(nombre)
+    base = {"windowsVirtualKeyCode": code, "nativeVirtualKeyCode": code,
+            "key": key if key.startswith("Key") is False else texto.upper(),
+            "code": key}
+    if len(texto) == 1:
+        base["key"] = texto
+    ws.cmd("Input.dispatchKeyEvent", type="keyDown", text=texto, **base)
+    time.sleep(ms / 1000.0)
+    ws.cmd("Input.dispatchKeyEvent", type="keyUp", **base)
+
+
+def tecla(nombre, veces="1"):
+    ws, _ = conectar()
+    for _ in range(int(veces)):
+        _pulsar(ws, nombre)
+        time.sleep(0.05)
+    print("Pulsado %s x%s." % (nombre, veces))
+
+
+def pulsa(nombre, ms="500"):
+    ws, _ = conectar()
+    _pulsar(ws, nombre, int(ms))
+    print("Mantenido %s durante %sms." % (nombre, ms))
+
+
+def clic(x, y):
+    ws, _ = conectar()
+    for tipo in ("mousePressed", "mouseReleased"):
+        ws.cmd("Input.dispatchMouseEvent", type=tipo, x=int(x), y=int(y),
+               button="left", clickCount=1)
+    print("Clic en (%s, %s)." % (x, y))
+
+
+def js(expr):
+    ws, _ = conectar()
+    r = ws.cmd("Runtime.evaluate", expression=expr, returnByValue=True, awaitPromise=True)
+    if r.get("exceptionDetails"):
+        salir("EXCEPCION: " + json.dumps(r["exceptionDetails"])[:600])
+    print(json.dumps(r["result"].get("value"), ensure_ascii=False, indent=2)[:8000])
+
+
+def logs():
+    ws, _ = conectar()
+    salida = _logs(ws)
+    print(salida if salida else "(consola limpia: ni un error ni un warning)")
+
+
+def mide(seg="3"):
+    ws, _ = conectar()
+    ws.cmd("Runtime.evaluate", expression="window.__agy.fps.length=0")
+    antes = len(json.loads(ws.cmd("Runtime.evaluate",
+                expression="JSON.stringify(window.__agy.log)",
+                returnByValue=True)["result"].get("value") or "[]"))
+    time.sleep(float(seg))
+    d = ws.cmd("Runtime.evaluate",
+               expression="JSON.stringify(window.__agy.fps)", returnByValue=True)
+    ms = json.loads(d["result"].get("value") or "[]")
+    ms = [x for x in ms if x > 0]
+    despues = json.loads(ws.cmd("Runtime.evaluate",
+                expression="JSON.stringify(window.__agy.log)",
+                returnByValue=True)["result"].get("value") or "[]")
+    if not ms:
+        print("Cero fotogramas en %ss: la pagina NO se esta animando." % seg)
+    else:
+        ms.sort()
+        print("FPS medio %.0f | peor fotograma %.0f ms | fotogramas %d" %
+              (1000.0 / (sum(ms) / len(ms)), ms[-1], len(ms)))
+        tirones = [x for x in ms if x > 32]
+        if tirones:
+            print("Tirones (>32ms): %d de %d" % (len(tirones), len(ms)))
+    nuevos = despues[antes:]
+    print("Errores nuevos durante la medida: " + ("\n" + "\n".join(nuevos) if nuevos else "ninguno"))
+
+
+def recarga():
+    ws, _ = conectar()
+    ws.cmd("Page.reload", ignoreCache=True)
+    time.sleep(1.2)
+    print("Recargada.")
+
+
+def cerrar():
+    st = estado()
+    if st.get("pid"):
+        try:
+            os.kill(st["pid"], 15)
+        except Exception:
+            pass
+    time.sleep(0.5)
+    subprocess.call(["rm", "-rf", DIR])
+    print("Ventana cerrada y temporales borrados.")
+
+
+ORDENES = {"abrir": abrir, "foto": foto, "logs": logs, "js": js, "tecla": tecla,
+           "pulsa": pulsa, "clic": clic, "mide": mide, "recarga": recarga, "cerrar": cerrar}
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "ayuda"):
+        print(__doc__)
+        sys.exit(0)
+    orden = sys.argv[1]
+    if orden not in ORDENES:
+        salir("Orden desconocida: %s\n%s" % (orden, __doc__))
+    try:
+        ORDENES[orden](*sys.argv[2:])
+    except TypeError as e:
+        salir("Argumentos mal: %s\n%s" % (e, __doc__))
+    except RuntimeError as e:
+        salir("Fallo del navegador: %s" % e)
