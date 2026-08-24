@@ -18,6 +18,10 @@ que ese trabajo exige.
   para que la sesión no se vuelva lenta.
 - **Escribir no es comprobar.** `cat > snake.html` no demuestra que el juego funcione,
   y el portón lo sabe.
+- **Si dices que algo no funciona, tiene que reproducirlo.** En cuanto tu mensaje trae
+  un "no me deja", "sigue igual", "está roto" o "da error", el turno no se cierra sin
+  al menos una reproducción del fallo. Nada de "debería funcionar" ni "a mí me va":
+  o pega la salida que lo demuestra, o dice qué probó, qué vio y qué le falta.
 - **La auditoría cara se cobra una vez por tarea.** Las vueltas siguientes solo obligan
   a volver a mirar, no a repetir el ritual entero.
 - **Guardia de destructivos**: avisa antes de un `rm -rf`, un `git reset --hard` o
@@ -115,7 +119,7 @@ segundos.
 
     python3 ~/.gemini/config/hooks-scripts/test-porton.py
 
-48 comprobaciones sobre el despachador. Tiene que terminar en `TODO OK`.
+57 comprobaciones sobre el despachador. Tiene que terminar en `TODO OK`.
 
 ## Quitarlo
 

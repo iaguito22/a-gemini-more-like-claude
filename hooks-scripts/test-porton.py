@@ -161,6 +161,39 @@ r = h("pre",{"toolCall":{"name":"write_to_file","args":{"TargetFile":"/tmp/agy-v
 eq("archivo nuevo -> pasa sin leer", r.get("decision") in ("ask","allow"), True)
 os.unlink(tmp)
 
+print("\n== 14. QUEJA: si el usuario dice que algo no va, hay que reproducirlo ==")
 limpia()
+r = h("postinv", {"prompt": "no me deja scrollear, sigue igual"})
+eq("avisa nada mas leer la queja", json.dumps(r), "reproduce el fallo")
+eq("y solo una vez por turno", json.dumps(h("postinv", {"prompt": "no me deja scrollear"})), "{}")
+eq("no cierra sin reproducir", parar().get("reason", ""), "sin haberlo reproducido")
+
+limpia()
+h("postinv", {"prompt": "el boton no funciona"})
+cmd("python3 repro.py")
+eq("con una reproduccion, cierra", parar().get("decision"), "stop")
+
+limpia()
+h("postinv", {"prompt": "no funciona el scroll"})
+foto()
+eq("mirarlo en el navegador tambien vale", parar().get("decision"), "stop")
+
+limpia()
+r = h("postinv", {"prompt": "hazme una web para una tienda de auriculares"})
+eq("un encargo normal no dispara la queja", json.dumps(r), "{}")
+eq("y cierra sin frenazo", parar().get("decision"), "stop")
+
+limpia()
+h("postinv", {"prompt": "sigue roto"})
+edita("arreglo.py", "x=1")
+eq("editar a ciegas no cuenta como reproducir", parar().get("reason", ""), "sin haberlo reproducido")
+
+limpia()
+h("postinv", {"prompt": "sigue roto"})
+cmd("cat > arreglo.py")
+eq("escribir con cat tampoco cuenta", parar().get("reason", ""), "sin haberlo reproducido")
+
+limpia()
+
 print("\n" + ("TODO OK" if not fallos else "FALLOS: " + str(len(fallos)) + " -> " + str(fallos)))
 sys.exit(1 if fallos else 0)

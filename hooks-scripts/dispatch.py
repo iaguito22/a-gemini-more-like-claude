@@ -47,6 +47,7 @@ def perm_rapido():
 STATE = "/tmp/agy-verify"
 ASKPASS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "askpass-zenity.sh")
 DEBUG = os.environ.get("AGY_HOOK_DEBUG") == "1"
+CRUDO = ""   # payload tal cual, para buscar la queja del usuario venga donde venga
 
 # ------------------------------------------------------------------ catalogos
 
@@ -117,6 +118,23 @@ NO_VERIFICA = (
     r'^\s*(sed|awk)\s+-i\b',
 )
 
+# El usuario diciendo "no funciona" es un dato, no una opinion. Si aparece en el turno,
+# ese turno tiene que contener una reproduccion del fallo, no una explicacion de por que
+# deberia ir bien.
+QUEJA = (
+    r'\bno\s+(me\s+)?(deja|va|vaa|funciona|carga|sale|responde|aparece|arranca|tira|rula)\b',
+    r'\bsigue\s+(igual|sin|roto|rota|fallando|mal|pasando|ahi)\b',
+    r'\bno\s+(se\s+)?(ve|puede|scrollea|mueve|abre|guarda)\b',
+    r'\b(esta|estan|sigue)\s+(roto|rota|rotos|mal)\b',
+    r'\bse\s+(rompe|cuelga|peta|congela|queda\s+colgado)\b',
+    r'\b(falla|fallan|petaba|peta|casca)\b',
+    r'\b(da|sale|salta)\s+(un\s+)?error\b',
+    r'\bsale\s+mal\b',
+    r'\bvuelve\s+a\s+(pasar|fallar|romperse)\b',
+    r'\bno\s+lo\s+(has|ha)\s+arreglado\b',
+    r"\bdoesn'?t\s+work\b", r'\bnot\s+working\b', r'\bstill\s+(broken|fails|failing)\b',
+)
+
 # Sin \b final a proposito: 'playwright_test.js' cuenta igual que 'playwright'.
 NAVEGA_CMD = (r'(agy-ver|playwright|puppeteer|selenium|xdg-open|firefox|chromium|google-chrome|'
               r'headless|cypress|webkit2png|serve\b|http-server)')
@@ -124,6 +142,32 @@ NAVEGA_CMD = (r'(agy-ver|playwright|puppeteer|selenium|xdg-open|firefox|chromium
 # Herramientas nativas de navegador, por prefijo.
 NAVEGA = ("browser_", "capture_browser", "open_browser_url", "antigravity_browser",
           "read_url_content")
+
+
+# Campos donde suele venir lo que ha escrito el usuario. Si no encontramos ninguno,
+# miramos el payload entero, pero solo si es corto: un payload largo puede traer el
+# historial completo, y entonces una queja de hace diez turnos frenaria para siempre.
+CAMPOS_USUARIO = ("prompt", "userPrompt", "userMessage", "message", "text", "query",
+                  "instruction", "lastUserMessage", "input")
+
+
+def texto_usuario(p, crudo):
+    for k in CAMPOS_USUARIO:
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+        if isinstance(v, dict):
+            for k2 in ("text", "content", "value"):
+                if isinstance(v.get(k2), str):
+                    return v[k2]
+    return crudo if len(crudo) < 4000 else ""
+
+
+def rx_queja(texto):
+    if not texto:
+        return False
+    bajo = texto.lower()
+    return any(rx("q" + pat, pat, re.I).search(bajo) for pat in QUEJA)
 
 
 def log(*a):
@@ -399,8 +443,23 @@ def post(p):
 
 # ------------------------------------------------------------- PostInvocation
 
+AVISO_QUEJA = """El usuario acaba de decirte que algo NO funciona. Su reporte es el dato.
+Antes de contestar: reproduce el fallo tal y como el lo describe y mira la salida.
+Si no consigues reproducirlo, eso tambien es un resultado: dilo, di que probaste y que
+viste. Lo que no vale es explicar por que deberia funcionar."""
+
+
 def postinv(p):
     f, st = cargar(p.get("conversationId", "anon"))
+
+    # La queja se marca una vez por turno: el estado se limpia al cerrar, asi que no
+    # se arrastra a la conversacion siguiente.
+    if not st.get("queja") and rx_queja(texto_usuario(p, CRUDO)):
+        st["queja"] = 1
+        guardar(f, st)
+        log("QUEJA detectada")
+        return {"injectSteps": [{"ephemeralMessage": AVISO_QUEJA}]}
+
     if st.get("fail_streak", 0) >= 3 and st.get("funneled", 0) < 2:
         st["funneled"] = st.get("funneled", 0) + 1
         st["fail_streak"] = 0
@@ -517,6 +576,14 @@ Lo que falta es esto:
 
 """
 
+SIN_REPRODUCIR = """PARA. El usuario te ha dicho que algo no funciona y vas a cerrar el
+turno sin haberlo reproducido ni una vez.
+1) Reproduce el fallo como el lo describe y pega la salida que lo demuestra.
+2) Si no lo reproduces, NO digas que esta bien: di que probaste, que viste, y que te
+   falta para reproducirlo.
+3) Solo entonces propon el arreglo, y vuelve a medir despues.
+Su reporte gana a tu impresion: el lo tiene delante y tu no."""
+
 REVISITA = """Ya lo diste por bueno una vez y lo has vuelto a tocar. Antes de cerrar:
 di en una linea que arreglaste, que has visto AHORA que demuestra que ya no pasa, y
 confirma que lo que antes iba sigue yendo."""
@@ -530,7 +597,12 @@ def stop(p):
     nivel = st.get("nivel", 0)
 
     etapa = razon = None
-    if nivel >= 2:
+    # Prioridad maxima: si el usuario reporto un fallo y el turno no contiene ni una
+    # sola reproduccion, no se cierra. Decir "esta bien" sin medir es el fallo que mas
+    # le cuesta al usuario, porque le obliga a discutir en vez de a leer una salida.
+    if st.get("queja") and st.get("checks", 0) == 0 and st.get("browser", 0) == 0:
+        etapa, razon = "queja", SIN_REPRODUCIR
+    elif nivel >= 2:
         # Un solo frenazo, y completo: lo que falta MAS la receta entera. La escalera de
         # antes (abrir, luego capturas, luego auditoria) costaba tres turnos y el modelo
         # reescribia el informe en cada uno.
@@ -601,8 +673,9 @@ def stop(p):
 
 
 def main():
+    global CRUDO
     ev = sys.argv[1] if len(sys.argv) > 1 else "post"
-    crudo = sys.stdin.read()
+    crudo = CRUDO = sys.stdin.read()
     lista = INTERESA if ev == "pre" else INTERESA_POST
     if ev in ("pre", "post") and not any(t in crudo for t in lista):
         sys.stdout.write("{}" if ev == "post" else '{"decision":"%s"}' % perm_rapido())
@@ -618,7 +691,9 @@ def main():
         # Un hook roto no debe bloquear nunca el trabajo del agente.
         log("ERROR", ev, repr(e))
         out = {"decision": "allow"} if ev == "pre" else ({"decision": "stop"} if ev == "stop" else {})
-    log(ev, (p.get("toolCall") or {}).get("name", ""), p.get("terminationReason", ""), json.dumps(out)[:160])
+    log(ev, "claves=" + ",".join(sorted(p.keys())) if DEBUG else "",
+        (p.get("toolCall") or {}).get("name", ""), p.get("terminationReason", ""),
+        json.dumps(out)[:160])
     print(json.dumps(out))
 
 
