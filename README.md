@@ -28,7 +28,7 @@ los necesita.
 
 ## Instalar
 
-    git clone https://github.com/<tu-usuario>/porton-verificacion /tmp/porton
+    git clone https://github.com/iaguito22/porton-verificacion /tmp/porton
     cp -r /tmp/porton/hooks-scripts ~/.gemini/config/
     cp /tmp/porton/hooks.json ~/.gemini/config/
     cp /tmp/porton/bin/agy-ver ~/.local/bin/ && chmod +x ~/.local/bin/agy-ver
