@@ -26,6 +26,61 @@ Un solo proceso por evento (los grupos de hooks con nombres separados se pisan e
 sí), y `json`/`re` se importan tarde: el hook tarda ~43 ms y la mayoría de llamadas ni
 los necesita.
 
+## Cómo se ve
+
+Un comando de solo lectura pasa sin preguntar:
+
+```
+$ echo '{"toolCall":{"name":"run_command","args":{"CommandLine":"ls -la"}}}' | dispatch.py pre
+{"decision": "allow"}
+```
+
+Un `rm -rf` no:
+
+```
+{"decision": "force_ask",
+ "reason": "Irreversible (rm recursivo/forzado). Mira antes que hay dentro y confirma."}
+```
+
+Un `sudo` se reescribe para que la contraseña la pida una ventana, no el agente:
+
+```
+{"decision": "allow",
+ "reason": "Comando con sudo: te pedira la contrasena en una ventana.",
+ "overwrite": {"CommandLine": "SUDO_ASKPASS=\".../askpass-zenity.sh\" sudo -A pacman -Syu"}}
+```
+
+Y esto es lo que pasa cuando el agente escribe una página con `<canvas>` y
+`requestAnimationFrame` y acto seguido intenta dar la tarea por terminada:
+
+```
+PARA. Ibas a terminar y no lo has abierto ni una vez y no has interrogado la pagina
+(teclas, `agy-ver js`, consola).
+
+Acabas de escribir algo que se mueve o se juega:
+  landing.html
+
+No escribas todavia ninguna conclusion: mirar el codigo no demuestra que funcione.
+Compruebalo con estos comandos exactos (la ventana se abre en pantalla, el usuario la
+esta mirando; no uses headless ni playwright):
+
+  agy-ver abrir landing.html
+  agy-ver foto antes
+  agy-ver mide 3              # FPS reales y errores durante 3 segundos
+  agy-ver tecla ArrowRight 5  # o Space, KeyA, Enter... teclas de verdad
+  agy-ver foto despues        # compara las dos capturas: cambio lo que esperabas?
+  agy-ver logs
+
+Y contesta estas seis ANTES de concluir nada, con lo que has OBSERVADO:
+  1. CONTROLES: por cada tecla, di primero que esperas ("derecha -> x sube"), pulsala
+     y mide con `agy-ver js`. [...]
+  5. LO QUE SE MUEVE: compara las dos capturas. Lo que no cambia NO se mueve, diga lo
+     que diga el codigo.
+  6. CASO DE FALLO: provocalo de verdad (choque, game over) y mira la PANTALLA.
+```
+
+El agente no puede cerrar el turno hasta hacerlo.
+
 ## Instalar
 
     git clone https://github.com/iaguito22/porton-verificacion /tmp/porton
