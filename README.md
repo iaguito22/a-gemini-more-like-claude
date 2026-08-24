@@ -1,7 +1,10 @@
-# portón de verificación
+# a gemini more like claude
 
-Hooks para Antigravity CLI que impiden que el agente diga "listo" sin haberlo
-comprobado.
+Hooks para el **Antigravity CLI de Google** que le quitan a Gemini la costumbre de
+decir "listo" sin haberlo comprobado.
+
+No es para Claude Code: Claude ya trae parte de esto de serie y el formato de hooks es
+otro. Esto es solo para `agy`.
 
 No es un prompt pidiendo por favor que verifique: es un portón que **intercepta cada
 llamada a herramienta** y bloquea el final de turno mientras falte la comprobación
@@ -83,10 +86,10 @@ El agente no puede cerrar el turno hasta hacerlo.
 
 ## Instalar
 
-    git clone https://github.com/iaguito22/porton-verificacion /tmp/porton
-    cp -r /tmp/porton/hooks-scripts ~/.gemini/config/
-    cp /tmp/porton/hooks.json ~/.gemini/config/
-    cp /tmp/porton/bin/agy-ver ~/.local/bin/ && chmod +x ~/.local/bin/agy-ver
+    git clone https://github.com/iaguito22/a-gemini-more-like-claude /tmp/agmlc
+    cp -r /tmp/agmlc/hooks-scripts ~/.gemini/config/
+    cp /tmp/agmlc/hooks.json ~/.gemini/config/
+    cp /tmp/agmlc/bin/agy-ver ~/.local/bin/ && chmod +x ~/.local/bin/agy-ver
 
 Y pega el contenido de `EVIDENCIA.md` en tu `~/.gemini/config/GEMINI.md`. Los hooks
 bloquean; ese texto es lo que le dice al modelo **cómo** comprobar. Sin él, el portón
