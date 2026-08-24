@@ -19,9 +19,9 @@ Aqui hay UNA forma. Y la ventana se ve, asi que se puede mirar mientras trabaja.
   agy-ver recarga
   agy-ver cerrar                   cierra Chrome y borra el perfil temporal
 """
-import base64, json, os, socket, subprocess, sys, time, urllib.request
+import base64, json, os, socket, subprocess, sys, tempfile, time, urllib.request
 
-DIR = "/tmp/agy-ver"
+DIR = os.path.join(tempfile.gettempdir(), "agy-ver")
 PERFIL = DIR + "/perfil"
 EST = DIR + "/estado.json"
 PUERTO = 9333
@@ -186,10 +186,19 @@ def abrir(destino):
 
     if not vivo:
         os.makedirs(PERFIL, exist_ok=True)
-        chrome = next((c for c in ("google-chrome-stable", "google-chrome", "chromium",
-                                   "chromium-browser", "brave")
-                       if subprocess.call(["which", c], stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL) == 0), None)
+        import shutil
+        candidatos = ["google-chrome-stable", "google-chrome", "chromium",
+                      "chromium-browser", "brave"]
+        if os.name == "nt":
+            candidatos = ["chrome.exe", "msedge.exe", "brave.exe"] + [
+                os.path.join(base, sub) for base in filter(None, (
+                    os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"),
+                    os.environ.get("LOCALAPPDATA")))
+                for sub in (r"Google\Chrome\Application\chrome.exe",
+                            r"Microsoft\Edge\Application\msedge.exe",
+                            r"BraveSoftware\Brave-Browser\Application\brave.exe")]
+        chrome = next((c for c in candidatos
+                       if shutil.which(c) or os.path.exists(c)), None)
         if not chrome:
             salir("No hay ningun Chrome/Chromium instalado.")
         p = subprocess.Popen(
@@ -197,7 +206,8 @@ def abrir(destino):
              "--no-first-run", "--no-default-browser-check", "--disable-session-crashed-bubble",
              "--disable-features=Translate,MediaRouter", "--window-size=1280,860",
              "--allow-file-access-from-files", "about:blank"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            **({} if os.name == "nt" else {"start_new_session": True}))
         for _ in range(100):
             try:
                 http("/json/version"); break

@@ -90,10 +90,32 @@ El agente no puede cerrar el turno hasta hacerlo.
 
 ## Instalar
 
+**Linux y macOS**
+
     git clone https://github.com/iaguito22/a-gemini-more-like-claude /tmp/agmlc
     cp -r /tmp/agmlc/hooks-scripts ~/.gemini/config/
     cp /tmp/agmlc/hooks.json ~/.gemini/config/
     cp /tmp/agmlc/bin/agy-ver ~/.local/bin/ && chmod +x ~/.local/bin/agy-ver
+
+**Windows** (PowerShell)
+
+    git clone https://github.com/iaguito22/a-gemini-more-like-claude $env:TEMP\agmlc
+    Copy-Item -Recurse $env:TEMP\agmlc\hooks-scripts $env:USERPROFILE\.gemini\config\
+    Copy-Item $env:TEMP\agmlc\hooks.windows.json $env:USERPROFILE\.gemini\config\hooks.json
+    Copy-Item $env:TEMP\agmlc\bin\agy-ver $env:USERPROFILE\.gemini\config\agy-ver.py
+
+Abre el `hooks.json` que acabas de copiar y **sustituye `TU-USUARIO`** por tu carpeta de
+usuario real, en las cuatro líneas. Se pone la ruta entera a propósito: no depende de que
+el CLI expanda `%USERPROFILE%` ni de que exista el nombre `python3`, que en Windows suele
+ser `python` o `py -3` (si el tuyo es `py`, cámbialo también ahí).
+
+En Windows, `agy-ver` se llama con Python delante, porque no hay shebang:
+
+    python $env:USERPROFILE\.gemini\config\agy-ver.py abrir pagina.html
+
+Lo único que no funciona en Windows es el **sudo por ventana**: `zenity` es de escritorio
+Linux. El resto (portón, proporcionalidad, guardia de destructivos, `agy-ver`) es Python
+puro y usa la carpeta temporal del sistema, sea `/tmp` o `%TEMP%`.
 
 Y pega el contenido de `EVIDENCIA.md` en tu `~/.gemini/config/GEMINI.md`. Los hooks
 bloquean; ese texto es lo que le dice al modelo **cómo** comprobar. Sin él, el portón
@@ -112,12 +134,14 @@ CDP.
     agy-ver mide 3                  agy-ver js '<expr>'       agy-ver recarga
     agy-ver cerrar
 
-Necesita Chrome o Chromium instalado. `mide 3` da FPS reales y tirones durante 3
+Necesita Chrome o Chromium instalado; en Windows busca además el Chrome, el Edge y el
+Brave de `Program Files` y de `LOCALAPPDATA`. `mide 3` da FPS reales y tirones durante 3
 segundos.
 
 ## Comprobar que quedó bien puesto
 
-    python3 ~/.gemini/config/hooks-scripts/test-porton.py
+    python3 ~/.gemini/config/hooks-scripts/test-porton.py                     # Linux · macOS
+    python $env:USERPROFILE\.gemini\config\hooks-scripts\test-porton.py      # Windows
 
 57 comprobaciones sobre el despachador. Tiene que terminar en `TODO OK`.
 

@@ -44,7 +44,9 @@ def perm_rapido():
             pass
     return "ask"
 
-STATE = "/tmp/agy-verify"
+# Sin importar tempfile: arrastra shutil y el hook se paga en cada llamada.
+TMP = os.environ.get("TMPDIR") or os.environ.get("TEMP") or ("C:\\Windows\\Temp" if os.name == "nt" else "/tmp")
+STATE = os.path.join(TMP, "agy-verify")
 ASKPASS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "askpass-zenity.sh")
 DEBUG = os.environ.get("AGY_HOOK_DEBUG") == "1"
 CRUDO = ""   # payload tal cual, para buscar la queja del usuario venga donde venga
@@ -172,7 +174,7 @@ def rx_queja(texto):
 
 def log(*a):
     if DEBUG:
-        with open("/tmp/agy-debug.log", "a") as f:
+        with open(os.path.join(TMP, "agy-debug.log"), "a") as f:
             f.write(" ".join(str(x) for x in a) + "\n")
 
 
