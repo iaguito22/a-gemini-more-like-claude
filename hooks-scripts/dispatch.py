@@ -63,6 +63,20 @@ VISUAL_EXT = (".html", ".htm", ".css", ".scss", ".jsx", ".tsx", ".vue", ".svelte
 EJEC_EXT = (".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".go", ".rs", ".rb",
             ".php", ".java", ".c", ".cc", ".cpp", ".h", ".lua", ".pl", ".sql", ".ipynb")
 
+# Un componente suelto (.jsx sin pagina que lo monte) no se puede abrir en Chrome: exigir
+# mirarlo obligaba a montar un index.html de pega (21 llamadas, 107 s medidos). Solo sube
+# a visual si hay un index.html cerca, y entonces lo que se abre es esa pagina.
+COMPONENTE_EXT = (".jsx", ".tsx", ".vue", ".svelte")
+
+def pagina_cerca(ruta):
+    d = os.path.dirname(os.path.abspath(ruta))
+    for _ in range(3):
+        for c in ("index.html", os.path.join("public", "index.html")):
+            if os.path.isfile(os.path.join(d, c)):
+                return os.path.join(d, c)
+        d = os.path.dirname(d)
+    return None
+
 # Un .js puede ser un script de terminal o una pagina. Esto lo distingue.
 PISTA_VISUAL = ("<canvas", "getcontext(", "requestanimationframe", "three.",
                 "webglrenderer", "document.queryselector", "document.getelementbyid",
@@ -364,10 +378,10 @@ def pre(p):
                 if "screenshot" in b:
                     pngs = 1
                 else:
-                    pngs = len(rx("aver", r'agy-ver\s+foto').findall(b))
+                    pngs = len(rx("aver", r'agy-ver\s+(?:foto|ve|movil)\b').findall(b))
             st["shots"] = st.get("shots", 0) + pngs
             st["sondas"] = st.get("sondas", 0) + len(
-                rx("sonda", r'agy-ver\s+(js|tecla|pulsa|clic|mide|logs)').findall(cmd.lower()))
+                rx("sonda", r'agy-ver\s+(js|tecla|pulsa|clic|mide|logs|escribe)').findall(cmd.lower()))
             guardar(f, st)
         return {"decision": "allow" if es_seguro(cmd) else perm_default()}
 
@@ -382,6 +396,17 @@ def pre(p):
                 vistos = set(fh.read().split("\n"))
         except Exception:
             vistos = set()
+        # Una pagina nueva sin la skill web delante sale con todos los delatores de IA
+        # (medido: 9 avisos del revisor contra 0). La descripcion no basta para que la
+        # cargue siempre, asi que aqui se garantiza. Una sola vez por conversacion.
+        nuevo = str(args.get("TargetFile") or "")
+        skill_web = os.path.expanduser("~/.gemini/config/skills/web-frontend/SKILL.md")
+        if name == "write_to_file" and nuevo.lower().endswith((".html", ".htm")) \
+                and not os.path.exists(nuevo) and os.path.exists(skill_web) \
+                and os.path.realpath(skill_web) not in vistos:
+            return {"decision": "deny",
+                    "reason": "Antes de crear una pagina, lee " + skill_web +
+                              " (view_file) y sigue su paso 1. Luego repite esta escritura."}
         # Solo exigimos lectura previa si el archivo YA existe: los nuevos pasan.
         sin_leer = [x for x in resueltas if x not in vistos]
         if sin_leer:
@@ -401,8 +426,14 @@ def pre(p):
                 cuerpo += v
         f, st = cargar(cid)
         nv = nivel_de(nombre, cuerpo)
+        objetivo = resolver(nombre, roots) or (resueltas[0] if resueltas else nombre)
+        if nombre.lower().endswith(COMPONENTE_EXT):
+            pag = pagina_cerca(objetivo if os.path.isabs(objetivo) else os.path.join(roots[0], objetivo))
+            if pag:
+                objetivo = pag
+            else:
+                nv = 1
         if nv >= st.get("nivel", 0) and nv > 0:
-            objetivo = resolver(nombre, roots) or (resueltas[0] if resueltas else nombre)
             st["obj"] = objetivo
         st["nivel"] = max(st.get("nivel", 0), nv)
         st["edits"] = st.get("edits", 0) + 1
@@ -416,6 +447,14 @@ def pre(p):
         st["shots"] = 0
         st["sondas"] = 0
         guardar(f, st)
+        # Lo que acaba de escribir ya lo conoce: exigirle releerlo antes de la siguiente
+        # edicion costaba un view_file por fichero nuevo sin evitar nada.
+        propio = nombre if os.path.isabs(nombre) else os.path.join(roots[0], nombre)
+        try:
+            with open(fseen, "a") as fh:
+                fh.write(os.path.realpath(propio) + "\n")
+        except Exception:
+            pass
         return {"decision": perm_default()}
 
     if resueltas:  # LEE
@@ -493,9 +532,9 @@ def postinv(p):
 
 
 # ------------------------------------------------- guia proactiva de comprobacion
-# El CLI no expone open_browser_url (solo existe con el IDE conectado), asi que sin
-# esto el agente se inventa cada vez una forma distinta de mirar una pagina y pierde
-# la mitad del turno. Se le da la receta ANTES de que escriba nada, no despues.
+# Sin receta el agente se inventa cada vez una forma distinta de mirar una pagina y
+# pierde la mitad del turno. Se le da ANTES de que escriba nada, no despues. agy-ver y
+# no open_browser_url: la ventana de agy-ver se ve en pantalla y el usuario la mira.
 
 GUIA_QUIETA = """Acabas de escribir algo que se mira con los ojos:
   %s
@@ -506,6 +545,8 @@ ni playwright: esta ventana se abre en la pantalla y el usuario quiere verla):
 
   agy-ver abrir %s
   agy-ver foto                # te imprime la ruta de un png: ABRELO y MIRALO
+  agy-ver ve '#seccion'       # baja hasta ahi y hace foto (no uses js scrollTo)
+  agy-ver movil               # foto a 390px; avisa si hay scroll horizontal
   agy-ver logs                # un solo error de consola significa que no funciona
 
 Y mirando la captura, contesta estas cuatro ANTES de concluir nada:
@@ -532,6 +573,7 @@ esta mirando; no uses headless ni playwright):
   agy-ver logs
 
 Otros: agy-ver js '<expresion>' para leer el estado por dentro, agy-ver clic X Y,
+agy-ver escribe '<selector>' 'texto' para inputs (dispara onChange; .value no),
 agy-ver pulsa ArrowUp 800 para mantener una tecla, agy-ver recarga, agy-ver cerrar.
 
 Y contesta estas seis ANTES de concluir nada, con lo que has OBSERVADO:

@@ -130,6 +130,7 @@ pelearse con headless ni con Playwright. Abre una ventana de Chrome **visible** 
 CDP.
 
     agy-ver abrir <fichero|url>     agy-ver foto [nombre]     agy-ver logs
+    agy-ver ve '#seccion'           agy-ver movil             agy-ver escribe '#q' 'texto'
     agy-ver tecla ArrowLeft 3       agy-ver pulsa Space 600   agy-ver clic X Y
     agy-ver mide 3                  agy-ver js '<expr>'       agy-ver recarga
     agy-ver cerrar
@@ -137,6 +138,14 @@ CDP.
 Necesita Chrome o Chromium instalado; en Windows busca además el Chrome, el Edge y el
 Brave de `Program Files` y de `LOCALAPPDATA`. `mide 3` da FPS reales y tirones durante 3
 segundos.
+
+- `ve` baja hasta un selector o a N px **sin scroll suave** y hace la foto. Con
+  `js scrollTo` y `scroll-behavior: smooth` la captura salía a mitad de camino y el
+  agente reabría la página una y otra vez.
+- `movil` hace la foto a 390 px y avisa si hay scroll horizontal.
+- `escribe` teclea como un teclado real: asignar `.value` no dispara el `onChange` de React.
+- `cerrar` cierra Chrome por CDP (aunque se haya perdido su pid) y **deja las fotos**:
+  si iba encadenado tras `foto`, el agente aún tiene que abrirlas.
 
 ## Comprobar que quedó bien puesto
 

@@ -16,6 +16,9 @@ Aqui hay UNA forma. Y la ventana se ve, asi que se puede mirar mientras trabaja.
   agy-ver pulsa <Tecla> <ms>       mantiene la tecla pulsada ese tiempo
   agy-ver clic <x> <y>             clic en pixel
   agy-ver mide <segundos>          FPS reales y errores durante ese rato
+  agy-ver ve <selector|px> [nombre]  baja hasta ahi (sin scroll suave) y hace la foto
+  agy-ver movil [nombre]           foto a 390px de ancho, como un movil
+  agy-ver escribe <selector> <txt> escribe como un teclado (dispara onChange de React)
   agy-ver recarga
   agy-ver cerrar                   cierra Chrome y borra el perfil temporal
 """
@@ -185,6 +188,9 @@ def abrir(destino):
             vivo = False
 
     if not vivo:
+        import glob
+        for viejo in glob.glob(os.path.join(DIR, "*.png")):
+            os.remove(viejo)
         os.makedirs(PERFIL, exist_ok=True)
         import shutil
         candidatos = ["google-chrome-stable", "google-chrome", "chromium",
@@ -365,6 +371,58 @@ def mide(seg="3"):
     print("Errores nuevos durante la medida: " + ("\n" + "\n".join(nuevos) if nuevos else "ninguno"))
 
 
+def ve(destino, nombre=None):
+    """Baja hasta un selector o a N px y hace la foto. Sin esto, window.scrollTo con
+    scroll-behavior:smooth hace la captura a mitad de camino y el agente reabre la pagina."""
+    ws, _ = conectar()
+    ws.cmd("Runtime.evaluate", expression=
+           "document.documentElement.style.scrollBehavior='auto';"
+           "if(document.body)document.body.style.scrollBehavior='auto'")
+    if destino.lstrip("-").isdigit():
+        expr = "window.scrollTo(0,%d);true" % int(destino)
+    else:
+        expr = ("(()=>{const e=document.querySelector(%s);if(!e)return false;"
+                "e.scrollIntoView({block:'start'});return true})()" % json.dumps(destino))
+    r = ws.cmd("Runtime.evaluate", expression=expr, returnByValue=True)
+    if not r["result"].get("value"):
+        salir("No existe ningun elemento '%s'." % destino)
+    time.sleep(0.9)   # las animaciones de entrada al hacer scroll necesitan su rato
+    foto(nombre or "ve-" + destino.strip("#.")[:20])
+
+
+def movil(nombre=None):
+    """Foto a 390px. La emulacion muere al cerrar la conexion, asi que va en una orden."""
+    ws, st = conectar()
+    ws.cmd("Emulation.setDeviceMetricsOverride", width=390, height=844,
+           deviceScaleFactor=1, mobile=True)
+    time.sleep(0.6)
+    st["n"] = st.get("n", 0) + 1
+    guardar(st)
+    ruta = os.path.join(DIR, "%02d-%s.png" % (st["n"], (nombre or "movil").replace("/", "_")))
+    datos = ws.cmd("Page.captureScreenshot", format="png")["data"]
+    ancho = ws.cmd("Runtime.evaluate", returnByValue=True, expression=
+                   "document.documentElement.scrollWidth")["result"].get("value")
+    ws.cmd("Emulation.clearDeviceMetricsOverride")
+    with open(ruta, "wb") as fh:
+        fh.write(base64.b64decode(datos))
+    print(ruta)
+    if ancho and ancho > 392:
+        print("OJO: la pagina mide %spx de ancho a 390: hay scroll horizontal." % ancho)
+
+
+def escribe(selector, texto):
+    """Escribe como un teclado real. Poner .value a mano no dispara onChange en React."""
+    ws, _ = conectar()
+    r = ws.cmd("Runtime.evaluate", returnByValue=True, expression=
+               "(()=>{const e=document.querySelector(%s);if(!e)return false;"
+               "e.focus();if(e.select)e.select();return true})()" % json.dumps(selector))
+    if not r["result"].get("value"):
+        salir("No existe ningun elemento '%s'." % selector)
+    ws.cmd("Input.insertText", text=texto)
+    time.sleep(0.3)
+    print('Escrito "%s" en %s.' % (texto, selector))
+
+
 def recarga():
     ws, _ = conectar()
     ws.cmd("Page.reload", ignoreCache=True)
@@ -374,18 +432,27 @@ def recarga():
 
 def cerrar():
     st = estado()
+    # Por CDP y no solo por pid: si el estado se perdio (dos sesiones a la vez), el pid
+    # guardado no es el de la ventana y esta se quedaba viva con los scripts viejos dentro.
+    try:
+        WS(http("/json/version")["webSocketDebuggerUrl"]).enviar(
+            {"id": 1, "method": "Browser.close"})
+    except Exception:
+        pass
     if st.get("pid"):
         try:
             os.kill(st["pid"], 15)
         except Exception:
             pass
     time.sleep(0.5)
-    subprocess.call(["rm", "-rf", DIR])
-    print("Ventana cerrada y temporales borrados.")
+    # Las fotos se quedan: si 'cerrar' va encadenado tras 'foto', el agente aun tiene
+    # que abrirlas. Se borran al siguiente 'abrir' con ventana nueva.
+    subprocess.call(["rm", "-rf", PERFIL, EST])
+    print("Ventana cerrada. Las fotos siguen en " + DIR)
 
 
 ORDENES = {"abrir": abrir, "foto": foto, "logs": logs, "js": js, "tecla": tecla,
-           "pulsa": pulsa, "clic": clic, "mide": mide, "recarga": recarga, "cerrar": cerrar}
+           "pulsa": pulsa, "clic": clic, "mide": mide, "ve": ve, "movil": movil, "escribe": escribe, "recarga": recarga, "cerrar": cerrar}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "ayuda"):

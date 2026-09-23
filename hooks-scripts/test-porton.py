@@ -10,10 +10,15 @@ def h(ev, payload):
     try: return json.loads(r.stdout)
     except Exception: return {"CRASH": r.stdout + r.stderr}
 
-def limpia():
+SKILL_WEB = os.path.expanduser("~/.gemini/config/skills/web-frontend/SKILL.md")
+
+def limpia(con_skill=True):
     for suf in (".json",".seen",".json.lock"):
         try: os.unlink("/tmp/agy-verify/"+CID+suf)
         except Exception: pass
+    # Los casos de abajo prueban el porton, no el freno de la skill web: la damos por leida.
+    if con_skill:
+        h("pre", {"toolCall": {"name": "view_file", "args": {"AbsolutePath": SKILL_WEB}}})
 
 def edita(nombre, cuerpo=""):
     c = {"name":"write_to_file","args":{"TargetFile":nombre,"CodeContent":cuerpo}}
@@ -194,6 +199,18 @@ cmd("cat > arreglo.py")
 eq("escribir con cat tampoco cuenta", parar().get("reason", ""), "sin haberlo reproducido")
 
 limpia()
+
+if os.path.exists(SKILL_WEB):
+    print("\n== 15. PAGINA NUEVA: primero la skill web ==")
+    limpia(con_skill=False)
+    pag = "/tmp/agy-verify-test-nueva.html"
+    try: os.unlink(pag)
+    except Exception: pass
+    wr = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": pag, "CodeContent": "<h1>x</h1>"}}}
+    eq("sin leer la skill -> frena", h("pre", wr).get("decision"), "deny")
+    h("pre", {"toolCall": {"name": "view_file", "args": {"AbsolutePath": SKILL_WEB}}})
+    eq("tras leerla -> pasa", h("pre", wr).get("decision") in ("allow", "ask"), True)
+    limpia()
 
 print("\n" + ("TODO OK" if not fallos else "FALLOS: " + str(len(fallos)) + " -> " + str(fallos)))
 sys.exit(1 if fallos else 0)
