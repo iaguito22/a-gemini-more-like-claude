@@ -88,6 +88,32 @@ Y contesta estas seis ANTES de concluir nada, con lo que has OBSERVADO:
 
 El agente no puede cerrar el turno hasta hacerlo.
 
+## Medido
+
+Mismo encargo y mismo modelo (Gemini 3.7 Flash Low, agy 1.2.11), el 27/09/2026:
+*"Hazme una web para Modula, una empresa gallega de casas modulares de madera. Tienen 6 modelos."*
+
+![La misma web sin y con el harness](docs/antes-despues.jpg)
+
+| | agy de fábrica | Con el harness (este portón + reglas + [skills](https://github.com/iaguito22/antigravity-skills)) |
+|---|---|---|
+| ¿La abrió antes de decir "listo"? | **No, ni una vez** | Sí: abrir, capturas, móvil, logs, teclas |
+| Revisor de delatores de IA | 4 avisos | limpio |
+| Idioma | contestó en gallego a un encargo en castellano | castellano |
+| Tokens de salida | 81.002 | **36.896 (−54 %)** |
+| Tiempo | 213 s | 629 s (fotos generadas y comprobación) |
+
+Lo que cuesta el portón por sí solo, en un snake (con las reglas puestas en ambos): **57 → 64 s** y
+11.792 → 12.015 tokens de salida (+2 %). Los dos funcionaban.
+
+Y lo que ha ganado el propio portón al afinarlo (23/09/2026, mismas tareas):
+
+| Tarea | Primera versión | Ahora |
+|---|---|---|
+| Componente React | 107 s · 21 herramientas | **30 s · 4** |
+| Landing | 126 s · 23 herramientas | **58 s · 5** |
+| Coste del hook por llamada | 43 ms | **27 ms** (camino rápido) |
+
 ## Instalar
 
 **Linux y macOS**
