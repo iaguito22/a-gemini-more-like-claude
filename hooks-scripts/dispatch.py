@@ -401,7 +401,12 @@ def pre(p):
         # cargue siempre, asi que aqui se garantiza. Una sola vez por conversacion.
         nuevo = str(args.get("TargetFile") or "")
         skill_web = os.path.expanduser("~/.gemini/config/skills/web-frontend/SKILL.md")
+        # Una escena 3D, un juego o un canvas no es una landing: el dado y los delatores
+        # de la skill web no le sirven de nada (medido: 3 pasos gastados en un cubo).
+        cuerpo = str(args.get("CodeContent") or "").lower()
+        es_lienzo = any(k in cuerpo for k in ("three.", "webglrenderer", "<canvas", "getcontext("))
         if name == "write_to_file" and nuevo.lower().endswith((".html", ".htm")) \
+                and not es_lienzo \
                 and not os.path.exists(nuevo) and os.path.exists(skill_web) \
                 and os.path.realpath(skill_web) not in vistos:
             return {"decision": "deny",

@@ -212,5 +212,13 @@ if os.path.exists(SKILL_WEB):
     eq("tras leerla -> pasa", h("pre", wr).get("decision") in ("allow", "ask"), True)
     limpia()
 
+    print("\n== 16. ESCENA 3D o CANVAS: no es una landing, no pide la skill web ==")
+    limpia(con_skill=False)
+    for cuerpo in ('<script type=module>import * as THREE from "three"; new THREE.WebGLRenderer()</script>',
+                   '<canvas id=c></canvas><script>c.getContext("2d")</script>'):
+        wr = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": pag, "CodeContent": cuerpo}}}
+        eq("lienzo sin leer la skill web -> pasa", h("pre", wr).get("decision") in ("allow", "ask"), True)
+    limpia()
+
 print("\n" + ("TODO OK" if not fallos else "FALLOS: " + str(len(fallos)) + " -> " + str(fallos)))
 sys.exit(1 if fallos else 0)

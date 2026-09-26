@@ -118,10 +118,20 @@ def guardar(st):
 
 def conectar():
     st = estado()
+    try:
+        paginas = [t for t in http("/json/list") if t.get("type") == "page"]
+        if paginas:
+            st["ws"] = paginas[0]["webSocketDebuggerUrl"]
+            guardar(st)
+    except Exception:
+        pass
     if not st.get("ws"):
         salir("No hay ninguna ventana abierta. Primero: agy-ver abrir <fichero>")
     try:
-        return WS(st["ws"]), st
+        ws = WS(st["ws"])
+        ws.cmd("Page.enable")
+        ws.cmd("Runtime.enable")
+        return ws, st
     except Exception:
         salir("La ventana ya no responde. Vuelve a: agy-ver abrir <fichero>")
 
@@ -141,6 +151,9 @@ def http(ruta, puerto=PUERTO):
 SHIM = r"""
 (() => {
   window.__agy = { log: [], fps: [] };
+  window.alert = (msg) => { try { window.__agy.log.push('ALERT: ' + msg); } catch (e) {} };
+  window.confirm = (msg) => true;
+  window.prompt = (msg) => null;
   const cap = (tipo) => {
     const orig = console[tipo].bind(console);
     console[tipo] = (...a) => {
